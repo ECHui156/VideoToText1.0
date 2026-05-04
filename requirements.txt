@@ -1,0 +1,9 @@
+gradio
+yt-dlp
+openai-whisper
+torch
+torchaudio
+opencv-python
+pytesseract
+Pillow
+numpy
