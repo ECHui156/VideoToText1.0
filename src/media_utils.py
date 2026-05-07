@@ -1,7 +1,7 @@
 import json
 import shutil
 import subprocess
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Callable
 
 
 def run_cmd(cmd: List[str]) -> subprocess.CompletedProcess:
@@ -16,8 +16,10 @@ def ensure_ffmpeg() -> None:
         raise RuntimeError("未检测到 ffmpeg/ffprobe，请先安装并配置到 PATH。")
 
 
-def ffprobe_subtitle_streams(video_path: str) -> List[Dict[str, Any]]:
+def ffprobe_subtitle_streams(video_path: str, progress_cb: Optional[Callable[[float, str], None]] = None) -> List[Dict[str, Any]]:
     ensure_ffmpeg()
+    if progress_cb:
+        progress_cb(0.0, "检测软字幕流（ffprobe）")
     cmd = [
         "ffprobe",
         "-v",
@@ -40,11 +42,15 @@ def ffprobe_subtitle_streams(video_path: str) -> List[Dict[str, Any]]:
                 "language": (stream.get("tags") or {}).get("language", ""),
             }
         )
+    if progress_cb:
+        progress_cb(1.0, "软字幕流检测完成")
     return streams
 
 
-def extract_audio(video_path: str, output_wav: str) -> str:
+def extract_audio(video_path: str, output_wav: str, progress_cb: Optional[Callable[[float, str], None]] = None) -> str:
     ensure_ffmpeg()
+    if progress_cb:
+        progress_cb(0.0, "调用 ffmpeg 提取音频")
     cmd = [
         "ffmpeg",
         "-y",
@@ -58,11 +64,15 @@ def extract_audio(video_path: str, output_wav: str) -> str:
         output_wav,
     ]
     run_cmd(cmd)
+    if progress_cb:
+        progress_cb(1.0, "音频提取完成")
     return output_wav
 
 
-def extract_subtitle_to_srt(video_path: str, stream_index: int, output_srt: str) -> str:
+def extract_subtitle_to_srt(video_path: str, stream_index: int, output_srt: str, progress_cb: Optional[Callable[[float, str], None]] = None) -> str:
     ensure_ffmpeg()
+    if progress_cb:
+        progress_cb(0.0, "调用 ffmpeg 提取软字幕到 SRT")
     cmd = [
         "ffmpeg",
         "-y",
@@ -75,4 +85,6 @@ def extract_subtitle_to_srt(video_path: str, stream_index: int, output_srt: str)
         output_srt,
     ]
     run_cmd(cmd)
+    if progress_cb:
+        progress_cb(1.0, "软字幕提取完成")
     return output_srt
