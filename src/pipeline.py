@@ -64,7 +64,7 @@ def run_pipeline(
 
         progress(0.15, "提取音频")
         audio_path = os.path.join(work_dir, "audio.wav")
-        extract_audio(video_path, audio_path)
+        extract_audio(video_path, audio_path, progress_cb=progress)
 
         progress(0.25, "语音转写")
         audio_segments = transcribe_audio(
@@ -73,7 +73,9 @@ def run_pipeline(
         log(f"语音转写段数: {len(audio_segments)}")
 
         progress(0.6, "检测软字幕")
-        subtitle_segments = extract_soft_subtitles(video_path, work_dir, log_cb=log)
+        subtitle_segments = extract_soft_subtitles(
+            video_path, work_dir, log_cb=log, progress_cb=progress
+        )
         if subtitle_segments:
             log(f"软字幕段数: {len(subtitle_segments)}")
         else:

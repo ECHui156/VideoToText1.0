@@ -7,6 +7,8 @@ os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
 import cv2
 import gradio as gr
+import threading
+import queue
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -78,28 +80,61 @@ def run_action(
         ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h
     )
 
+    q: "queue.Queue" = queue.Queue()
+
     def progress_cb(value: float, desc: str) -> None:
+        # 将描述推入队列以便生成器输出，同时更新 Gradio 进度条
+        if desc:
+            q.put(("msg", desc))
         if value is None:
             progress(0, desc=desc)
         else:
             progress(value, desc=desc)
 
-    result = run_pipeline(
-        input_type=mode,
-        local_video_path=video_path,
-        bilibili_url=bilibili_url,
-        output_dir=output_dir,
-        model_size=model_size,
-        language=language,
-        ocr_fps=ocr_fps,
-        ocr_lang=ocr_lang,
-        ocr_similarity=ocr_similarity,
-        ocr_region=ocr_region,
-        progress_cb=progress_cb,
-    )
+    def worker():
+        try:
+            result = run_pipeline(
+                input_type=mode,
+                local_video_path=video_path,
+                bilibili_url=bilibili_url,
+                output_dir=output_dir,
+                model_size=model_size,
+                language=language,
+                ocr_fps=ocr_fps,
+                ocr_lang=ocr_lang,
+                ocr_similarity=ocr_similarity,
+                ocr_region=ocr_region,
+                progress_cb=progress_cb,
+            )
+            q.put(("done", result))
+        except Exception as exc:
+            q.put(("error", str(exc)))
 
-    log_text = "\n".join(result.logs)
-    return result.audio_txt_path, result.subtitle_txt_path, log_text
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    logs: list[str] = []
+
+    while True:
+        typ, payload = q.get()
+        if typ == "msg":
+            desc = payload
+            if not logs or logs[-1] != desc:
+                logs.append(desc)
+            yield None, None, "\n".join(logs)
+        elif typ == "done":
+            result = payload
+            # 合并并去重连续重复条目
+            for l in (result.logs or []):
+                if not logs or logs[-1] != l:
+                    logs.append(l)
+            yield result.audio_txt_path, result.subtitle_txt_path, "\n".join(logs)
+            break
+        elif typ == "error":
+            err = payload
+            logs.append(f"错误: {err}")
+            yield None, None, "\n".join(logs)
+            break
 
 
 with gr.Blocks(title="视频转文字") as demo:

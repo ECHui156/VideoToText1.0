@@ -87,8 +87,9 @@ def extract_soft_subtitles(
     video_path: str,
     temp_dir: str,
     log_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> Optional[List[Segment]]:
-    streams = ffprobe_subtitle_streams(video_path)
+    streams = ffprobe_subtitle_streams(video_path, progress_cb=progress_cb)
     if not streams:
         return None
     stream = streams[0]
@@ -97,7 +98,7 @@ def extract_soft_subtitles(
         codec = stream.get("codec") or "unknown"
         log_cb(f"检测到软字幕流 index={stream.get('index')} lang={lang} codec={codec}")
     srt_path = os.path.join(temp_dir, "soft_subs.srt")
-    extract_subtitle_to_srt(video_path, stream.get("index"), srt_path)
+    extract_subtitle_to_srt(video_path, stream.get("index"), srt_path, progress_cb=progress_cb)
     segments = parse_srt(srt_path, log_cb=log_cb)
     if not segments:
         if log_cb:
