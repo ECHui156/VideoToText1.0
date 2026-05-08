@@ -73,6 +73,8 @@ def run_action(
     ocr_region_y: float,
     ocr_region_w: float,
     ocr_region_h: float,
+    do_transcribe: bool,
+    do_ocr: bool,
     progress=gr.Progress(),
 ):
     mode = "local" if input_mode == "本地视频" else "bilibili"
@@ -155,6 +157,10 @@ with gr.Blocks(title="视频转文字") as demo:
 
     output_dir = gr.Textbox(label="输出目录", value="outputs", lines=1)
 
+    with gr.Row():
+        do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
+        do_ocr = gr.Checkbox(value=True, label="启用 OCR 字幕识别 (Tesseract)")
+
     with gr.Accordion("高级设置", open=False):
         model_size = gr.Dropdown(
             ["tiny", "base", "small", "medium", "large"], value="base", label="Whisper 模型"
@@ -174,7 +180,8 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_w = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[2], step=0.01, label="OCR 区域 Width")
             ocr_region_h = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[3], step=0.01, label="OCR 区域 Height")
 
-    with gr.Accordion("OCR 区域预览（仅本地视频）", open=False):
+    ocr_preview_section = gr.Accordion("OCR 区域预览（仅本地视频）", open=False)
+    with ocr_preview_section:
         preview_time = gr.Slider(0, 10, value=0.0, step=0.1, label="预览时间点 (秒)")
         preview_image = gr.Image(label="OCR 区域预览", type="numpy")
 
@@ -202,9 +209,16 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_y,
             ocr_region_w,
             ocr_region_h,
+            do_transcribe,
+            do_ocr,
         ],
         outputs=[audio_txt, subtitle_txt, log_box],
     )
+
+    def _toggle_ocr_preview(enabled: bool):
+        return gr.update(visible=enabled)
+
+    do_ocr.change(_toggle_ocr_preview, inputs=[do_ocr], outputs=[ocr_preview_section])
 
     video_path.change(
         _on_video_selected,

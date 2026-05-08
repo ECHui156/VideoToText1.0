@@ -22,6 +22,8 @@ def run_pipeline(
     ocr_lang: str,
     ocr_similarity: float,
     ocr_region: Optional[Tuple[float, float, float, float]] = None,
+    do_transcribe: bool = True,
+    do_ocr: bool = True,
     keep_temp: bool = False,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> PipelineOutput:
@@ -79,16 +81,30 @@ def run_pipeline(
         if subtitle_segments:
             log(f"软字幕段数: {len(subtitle_segments)}")
         else:
-            progress(0.7, "无软字幕，开始 OCR")
-            subtitle_segments = ocr_subtitles_from_video(
-                video_path,
-                ocr_fps=ocr_fps,
-                lang=ocr_lang,
-                similarity_threshold=ocr_similarity,
-                ocr_region=ocr_region,
-                progress_cb=progress,
+            log("跳过音频转写（用户选择）")
+            audio_segments = []
+
+        if do_ocr:
+            progress(0.6, "检测软字幕")
+            subtitle_segments = extract_soft_subtitles(
+                video_path, work_dir, log_cb=log, progress_cb=progress
             )
-            log(f"OCR 字幕段数: {len(subtitle_segments)}")
+            if subtitle_segments:
+                log(f"软字幕段数: {len(subtitle_segments)}")
+            else:
+                progress(0.7, "无软字幕，开始 OCR")
+                subtitle_segments = ocr_subtitles_from_video(
+                    video_path,
+                    ocr_fps=ocr_fps,
+                    lang=ocr_lang,
+                    similarity_threshold=ocr_similarity,
+                    ocr_region=ocr_region,
+                    progress_cb=progress,
+                )
+                log(f"OCR 字幕段数: {len(subtitle_segments)}")
+        else:
+            log("跳过 OCR 字幕识别（用户选择）")
+            subtitle_segments = []
 
         output_dir = output_dir or "outputs"
         output_dir = os.path.abspath(output_dir)
@@ -98,18 +114,30 @@ def run_pipeline(
         audio_txt_path = os.path.join(output_dir, f"{base_name}_音频稿.txt")
         subtitle_txt_path = os.path.join(output_dir, f"{base_name}_字幕稿.txt")
 
-        write_txt(audio_segments, audio_txt_path)
-        write_txt(subtitle_segments, subtitle_txt_path)
-        log(f"输出音频稿: {audio_txt_path}")
-        log(f"输出字幕稿: {subtitle_txt_path}")
+        audio_out_path = ""
+        subtitle_out_path = ""
+
+        if audio_segments:
+            write_txt(audio_segments, audio_txt_path)
+            audio_out_path = audio_txt_path
+            log(f"输出音频稿: {audio_txt_path}")
+        else:
+            log("未生成音频稿（无转写或已跳过）")
+
+        if subtitle_segments:
+            write_txt(subtitle_segments, subtitle_txt_path)
+            subtitle_out_path = subtitle_txt_path
+            log(f"输出字幕稿: {subtitle_txt_path}")
+        else:
+            log("未生成字幕稿（无软字幕/OCR 或已跳过）")
 
         progress(1.0, "完成")
         return PipelineOutput(
             video_path=video_path,
             audio_segments=audio_segments,
             subtitle_segments=subtitle_segments,
-            audio_txt_path=audio_txt_path,
-            subtitle_txt_path=subtitle_txt_path,
+            audio_txt_path=audio_out_path,
+            subtitle_txt_path=subtitle_out_path,
             logs=logs,
         )
     finally:
