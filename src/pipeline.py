@@ -26,6 +26,8 @@ def run_pipeline(
     do_ocr: bool = True,
     keep_temp: bool = False,
     progress_cb: Optional[Callable[[float, str], None]] = None,
+    device: str = "cpu",
+    use_fp16: bool = False,
 ) -> PipelineOutput:
     ensure_ffmpeg()
     logs = []
@@ -70,8 +72,14 @@ def run_pipeline(
             extract_audio(video_path, audio_path, progress_cb=progress)
 
             progress(0.25, "语音转写")
+            # pass use_fp16 through progress_cb-controlled default (UI supplies)
             audio_segments = transcribe_audio(
-                audio_path, model_size=model_size, language=language, progress_cb=progress
+                audio_path,
+                model_size=model_size,
+                language=language,
+                device=device,
+                use_fp16=use_fp16,
+                progress_cb=progress,
             )
             log(f"语音转写段数: {len(audio_segments)}")
         else:
