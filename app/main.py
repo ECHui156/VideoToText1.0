@@ -110,8 +110,6 @@ def run_action(
                 ocr_lang=ocr_lang,
                 ocr_similarity=ocr_similarity,
                 ocr_region=ocr_region,
-                do_transcribe=do_transcribe,
-                do_ocr=do_ocr,
                 progress_cb=progress_cb,
             )
             q.put(("done", result))
@@ -120,54 +118,28 @@ def run_action(
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    logs_base: list[str] = []
-    dot_counter = 0
-    last_display = ""
+
+    logs: list[str] = []
 
     while True:
-        try:
-            typ, payload = q.get(timeout=0.5)
-        except queue.Empty:
-            # 超时时为当前最后一条添加动态 "..." 效果，但仅在显示内容变化时才更新 UI，避免打断滚动/交互
-            if logs_base:
-                dots = "." * (dot_counter % 4)
-                display_lines = logs_base[:-1] + [logs_base[-1] + dots]
-                dot_counter += 1
-                display = "\n".join(display_lines)
-                if display != last_display:
-                    last_display = display
-                    yield gr.update(), gr.update(), display
-            continue
-
+        typ, payload = q.get()
         if typ == "msg":
             desc = payload
-            if not logs_base or logs_base[-1] != desc:
-                logs_base.append(desc)
-            dot_counter = 0
-            display = "\n".join(logs_base)
-            if display != last_display:
-                last_display = display
-                yield gr.update(), gr.update(), display
+            if not logs or logs[-1] != desc:
+                logs.append(desc)
+            yield None, None, "\n".join(logs)
         elif typ == "done":
             result = payload
-            # 合并 pipeline 返回的日志到基础日志（去重连续项）
+            # 合并并去重连续重复条目
             for l in (result.logs or []):
-                if not logs_base or logs_base[-1] != l:
-                    logs_base.append(l)
-
-            audio_out = result.audio_txt_path or None
-            subtitle_out = result.subtitle_txt_path or None
-            final_display = "\n".join(logs_base)
-            if final_display != last_display:
-                last_display = final_display
-            out_audio = audio_out if audio_out else gr.update()
-            out_sub = subtitle_out if subtitle_out else gr.update()
-            yield out_audio, out_sub, final_display
+                if not logs or logs[-1] != l:
+                    logs.append(l)
+            yield result.audio_txt_path, result.subtitle_txt_path, "\n".join(logs)
             break
         elif typ == "error":
             err = payload
-            logs_base.append(f"错误: {err}")
-            yield gr.update(), gr.update(), "\n".join(logs_base)
+            logs.append(f"错误: {err}")
+            yield None, None, "\n".join(logs)
             break
 
 
