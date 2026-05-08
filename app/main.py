@@ -73,6 +73,8 @@ def run_action(
     ocr_region_y: float,
     ocr_region_w: float,
     ocr_region_h: float,
+    do_transcribe: bool,
+    do_ocr: bool,
     progress=gr.Progress(),
 ):
     mode = "local" if input_mode == "本地视频" else "bilibili"
@@ -104,6 +106,8 @@ def run_action(
                 ocr_lang=ocr_lang,
                 ocr_similarity=ocr_similarity,
                 ocr_region=ocr_region,
+                do_transcribe=do_transcribe,
+                do_ocr=do_ocr,
                 progress_cb=progress_cb,
             )
             q.put(("done", result))
@@ -155,6 +159,10 @@ with gr.Blocks(title="视频转文字") as demo:
 
     output_dir = gr.Textbox(label="输出目录", value="outputs", lines=1)
 
+    with gr.Row():
+        do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
+        do_ocr = gr.Checkbox(value=True, label="启用 OCR 字幕识别 (Tesseract)")
+
     with gr.Accordion("高级设置", open=False):
         model_size = gr.Dropdown(
             ["tiny", "base", "small", "medium", "large"], value="base", label="Whisper 模型"
@@ -202,6 +210,8 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_y,
             ocr_region_w,
             ocr_region_h,
+            do_transcribe,
+            do_ocr,
         ],
         outputs=[audio_txt, subtitle_txt, log_box],
     )

@@ -22,6 +22,8 @@ def run_pipeline(
     ocr_lang: str,
     ocr_similarity: float,
     ocr_region: Optional[Tuple[float, float, float, float]] = None,
+    do_transcribe: bool = True,
+    do_ocr: bool = True,
     keep_temp: bool = False,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> PipelineOutput:
@@ -62,33 +64,41 @@ def run_pipeline(
             video_path = local_video_path
             log(f"使用本地视频: {video_path}")
 
-        progress(0.15, "提取音频")
-        audio_path = os.path.join(work_dir, "audio.wav")
-        extract_audio(video_path, audio_path, progress_cb=progress)
+        if do_transcribe:
+            progress(0.15, "提取音频")
+            audio_path = os.path.join(work_dir, "audio.wav")
+            extract_audio(video_path, audio_path, progress_cb=progress)
 
-        progress(0.25, "语音转写")
-        audio_segments = transcribe_audio(
-            audio_path, model_size=model_size, language=language, progress_cb=progress
-        )
-        log(f"语音转写段数: {len(audio_segments)}")
-
-        progress(0.6, "检测软字幕")
-        subtitle_segments = extract_soft_subtitles(
-            video_path, work_dir, log_cb=log, progress_cb=progress
-        )
-        if subtitle_segments:
-            log(f"软字幕段数: {len(subtitle_segments)}")
-        else:
-            progress(0.7, "无软字幕，开始 OCR")
-            subtitle_segments = ocr_subtitles_from_video(
-                video_path,
-                ocr_fps=ocr_fps,
-                lang=ocr_lang,
-                similarity_threshold=ocr_similarity,
-                ocr_region=ocr_region,
-                progress_cb=progress,
+            progress(0.25, "语音转写")
+            audio_segments = transcribe_audio(
+                audio_path, model_size=model_size, language=language, progress_cb=progress
             )
-            log(f"OCR 字幕段数: {len(subtitle_segments)}")
+            log(f"语音转写段数: {len(audio_segments)}")
+        else:
+            log("跳过音频转写（用户选择）")
+            audio_segments = []
+
+        if do_ocr:
+            progress(0.6, "检测软字幕")
+            subtitle_segments = extract_soft_subtitles(
+                video_path, work_dir, log_cb=log, progress_cb=progress
+            )
+            if subtitle_segments:
+                log(f"软字幕段数: {len(subtitle_segments)}")
+            else:
+                progress(0.7, "无软字幕，开始 OCR")
+                subtitle_segments = ocr_subtitles_from_video(
+                    video_path,
+                    ocr_fps=ocr_fps,
+                    lang=ocr_lang,
+                    similarity_threshold=ocr_similarity,
+                    ocr_region=ocr_region,
+                    progress_cb=progress,
+                )
+                log(f"OCR 字幕段数: {len(subtitle_segments)}")
+        else:
+            log("跳过 OCR 字幕识别（用户选择）")
+            subtitle_segments = []
 
         output_dir = output_dir or "outputs"
         output_dir = os.path.abspath(output_dir)
