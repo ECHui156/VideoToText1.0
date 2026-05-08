@@ -106,3 +106,44 @@ setx TESSERACT_CMD "C:\Program Files\Tesseract-OCR\tesseract.exe"
 - 首次使用 Whisper 会自动下载模型文件，需联网一次
 - 若视频内含软字幕，将优先提取软字幕
 - 若无软字幕，将自动启用 OCR 识别硬字幕
+
+## GPU / CUDA 注意事项（可选）
+
+- 本项目在使用 GPU 加速时需要安装 CUDA-enabled 的 PyTorch 二进制包（即带有 CUDA 支持的 `torch`）。`requirements.txt` 中仅列出 `torch`，但不会自动为你选择带 CUDA 的构建；你需要根据系统驱动/显卡选择合适的 PyTorch 构建并安装。
+- 检查你的系统 CUDA 驱动版本：在终端运行 `nvidia-smi`，记录 `CUDA Version`。然后选择与之匹配的 `pytorch-cuda` / wheel（例如 `pytorch-cuda=13.1` 或 pip 索引 `cu131` 等）。
+
+示例（参考）：
+- 对于 **NVIDIA GeForce RTX 5070**（本机示例中 `nvidia-smi` 显示 CUDA Version: 13.1），推荐安装匹配 CUDA 13.x 的 PyTorch，例如通过 conda/mamba：
+
+```powershell
+mamba install -n vtt-gpu -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=13.1 -y
+```
+
+- 对于 **NVIDIA GeForce RTX 5060**（常见驱动/工具链为 CUDA 12.x），可尝试匹配的 12.x 构建，例如 `pytorch-cuda=12.4`：
+
+```powershell
+mamba install -n vtt-gpu -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=12.4 -y
+```
+
+注意：不同系统（Windows/macOS/Linux）、不同 Python 版本和驱动版本会影响可用的二进制包。如果找不到匹配的 wheel，推荐使用 `mamba` 安装 `pytorch-cuda`（conda-forge / pytorch channel），或在极端情况下考虑从源码编译并设置 `TORCH_CUDA_ARCH_LIST=sm_120`（复杂且耗时）。
+
+已添加方便脚本：仓库根目录下有三种可执行脚本，用于在当前激活的 Python 环境中安装基于 `cu128` 的 pip wheel（示例）：
+
+- `requirements_for_gpu.ps1`  （PowerShell）
+- `requirements_for_gpu.bat`  （Windows batch）
+- `requirements_for_gpu.sh`   （POSIX shell）
+
+使用前请先激活目标虚拟环境（例如 `D:\VideoToText1.0\.venv`），然后运行脚本：
+
+```powershell
+# Windows PowerShell（在项目目录）
+.\requirements_for_gpu.ps1
+
+# 或者在 cmd 下：
+.\requirements_for_gpu.bat
+
+# 在 WSL / macOS / Linux：
+bash requirements_for_gpu.sh
+```
+
+如果你不确定要安装哪个 `pytorch-cuda` 版本，请问AI，有时候你需要卸载pytorch才能安装适合你的显卡的带GPU的pytorch
