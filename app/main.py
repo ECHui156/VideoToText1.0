@@ -116,28 +116,52 @@ def run_action(
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-
-    logs: list[str] = []
+    logs_base: list[str] = []
+    dot_counter = 0
+    last_display = ""
 
     while True:
-        typ, payload = q.get()
+        try:
+            typ, payload = q.get(timeout=0.5)
+        except queue.Empty:
+            # 超时时为当前最后一条添加动态 "..." 效果，但仅在显示内容变化时才更新 UI，避免打断滚动/交互
+            if logs_base:
+                dots = "." * (dot_counter % 4)
+                display_lines = logs_base[:-1] + [logs_base[-1] + dots]
+                dot_counter += 1
+                display = "\n".join(display_lines)
+                if display != last_display:
+                    last_display = display
+                    yield None, None, display
+            continue
+
         if typ == "msg":
             desc = payload
-            if not logs or logs[-1] != desc:
-                logs.append(desc)
-            yield None, None, "\n".join(logs)
+            if not logs_base or logs_base[-1] != desc:
+                logs_base.append(desc)
+            dot_counter = 0
+            display = "\n".join(logs_base)
+            if display != last_display:
+                last_display = display
+                yield None, None, display
         elif typ == "done":
             result = payload
-            # 合并并去重连续重复条目
+            # 合并 pipeline 返回的日志到基础日志（去重连续项）
             for l in (result.logs or []):
-                if not logs or logs[-1] != l:
-                    logs.append(l)
-            yield result.audio_txt_path, result.subtitle_txt_path, "\n".join(logs)
+                if not logs_base or logs_base[-1] != l:
+                    logs_base.append(l)
+
+            audio_out = result.audio_txt_path or None
+            subtitle_out = result.subtitle_txt_path or None
+            final_display = "\n".join(logs_base)
+            if final_display != last_display:
+                last_display = final_display
+            yield audio_out, subtitle_out, final_display
             break
         elif typ == "error":
             err = payload
-            logs.append(f"错误: {err}")
-            yield None, None, "\n".join(logs)
+            logs_base.append(f"错误: {err}")
+            yield None, None, "\n".join(logs_base)
             break
 
 
@@ -182,7 +206,8 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_w = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[2], step=0.01, label="OCR 区域 Width")
             ocr_region_h = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[3], step=0.01, label="OCR 区域 Height")
 
-    with gr.Accordion("OCR 区域预览（仅本地视频）", open=False):
+    ocr_preview_section = gr.Accordion("OCR 区域预览（仅本地视频）", open=False)
+    with ocr_preview_section:
         preview_time = gr.Slider(0, 10, value=0.0, step=0.1, label="预览时间点 (秒)")
         preview_image = gr.Image(label="OCR 区域预览", type="numpy")
 
@@ -215,6 +240,11 @@ with gr.Blocks(title="视频转文字") as demo:
         ],
         outputs=[audio_txt, subtitle_txt, log_box],
     )
+
+    def _toggle_ocr_preview(enabled: bool):
+        return gr.update(visible=enabled)
+
+    do_ocr.change(_toggle_ocr_preview, inputs=[do_ocr], outputs=[ocr_preview_section])
 
     video_path.change(
         _on_video_selected,
