@@ -26,6 +26,8 @@ def run_pipeline(
     do_ocr: bool = True,
     keep_temp: bool = False,
     progress_cb: Optional[Callable[[float, str], None]] = None,
+    device: str = "cpu",
+    use_fp16: bool = False,
 ) -> PipelineOutput:
     ensure_ffmpeg()
     logs = []

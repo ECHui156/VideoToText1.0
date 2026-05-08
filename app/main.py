@@ -75,6 +75,8 @@ def run_action(
     ocr_region_h: float,
     do_transcribe: bool,
     do_ocr: bool,
+    use_gpu: bool,
+    use_fp16: bool,
     progress=gr.Progress(),
 ):
     mode = "local" if input_mode == "本地视频" else "bilibili"
@@ -101,6 +103,8 @@ def run_action(
                 bilibili_url=bilibili_url,
                 output_dir=output_dir,
                 model_size=model_size,
+                device=("cuda" if use_gpu else "cpu"),
+                use_fp16=use_fp16,
                 language=language,
                 ocr_fps=ocr_fps,
                 ocr_lang=ocr_lang,
@@ -160,8 +164,16 @@ with gr.Blocks(title="视频转文字") as demo:
     with gr.Row():
         do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
         do_ocr = gr.Checkbox(value=True, label="启用 OCR 字幕识别 (Tesseract)")
+        use_gpu = gr.Checkbox(value=False, label="使用 GPU (CUDA) 进行转写")
+        use_fp16 = gr.Checkbox(value=False, label="使用 FP16（混合精度，加速但可能不兼容）")
 
     with gr.Accordion("高级设置", open=False):
+        model_pref = gr.Dropdown(
+            ["快速 (tiny)", "平衡 (base)", "高精度 (large)", "自定义"],
+            value="平衡 (base)",
+            label="模型强度偏好",
+        )
+
         model_size = gr.Dropdown(
             ["tiny", "base", "small", "medium", "large"], value="base", label="Whisper 模型"
         )
@@ -179,6 +191,19 @@ with gr.Blocks(title="视频转文字") as demo:
         with gr.Row():
             ocr_region_w = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[2], step=0.01, label="OCR 区域 Width")
             ocr_region_h = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[3], step=0.01, label="OCR 区域 Height")
+
+        def _on_model_pref_change(pref: str):
+            # 映射偏好到具体模型尺寸；自定义时展示 model_size
+            mapping = {
+                "快速 (tiny)": "tiny",
+                "平衡 (base)": "base",
+                "高精度 (large)": "large",
+            }
+            if pref in mapping:
+                return gr.update(value=mapping[pref]), gr.update(visible=False)
+            return gr.update(visible=True)
+
+        model_pref.change(_on_model_pref_change, inputs=[model_pref], outputs=[model_size, model_size])
 
     ocr_preview_section = gr.Accordion("OCR 区域预览（仅本地视频）", open=False)
     with ocr_preview_section:
@@ -211,6 +236,8 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_h,
             do_transcribe,
             do_ocr,
+            use_gpu,
+            use_fp16,
         ],
         outputs=[audio_txt, subtitle_txt, log_box],
     )
