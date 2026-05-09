@@ -24,6 +24,19 @@ from src.ocr_utils import (
 from src.pipeline import run_pipeline
 
 
+PROMPT_DEMO = """# Role
+你是一位专业的文字编辑和排版专家，擅长处理口语化的“语音转写生肉稿件”，能将其转化为排版优雅、易于阅读的高质量文章。
+# Task
+请帮我整理我提供的语音转写文本。原始文本呈“一句一段”的碎片化格式，且缺乏标点、包含同音错别字。你需要根据语义将其重新排版为连贯、结构清晰的段落文本。
+# Guidelines
+1. **添加标点**：根据语境、停顿和语气，准确添加合适的标点符号（逗号、句号、问号、叹号等），确保文本阅读流畅。
+2. **纠正错词**：智能识别并修正语音识别产生的同音/近音错别字（例如技术专有名词、日常用语错误等），但**严格禁止改变句子的原意**。
+3. **语义分段**：打破原有的一句一段格式。根据上下文的逻辑连贯性、话题的自然切换点（如进入新阶段、新观点、新场景等）进行合理分段。不要分得太碎，也不要全篇不分段。
+4. **保持原汁原味**：除了纠错和标点外，禁止随意增删原文本的实质内容，严格保留讲话者原本的口语风格、语气和表述逻辑。
+# Output
+直接输出整理后的正文即可，不需要任何额外的解释或寒暄。"""
+
+
 def _build_ocr_region(x: float, y: float, w: float, h: float):
     try:
         return validate_ocr_region((x, y, w, h))
@@ -131,7 +144,6 @@ def _on_media_selected(video_path: str, audio_path: str, x: float, y: float, w: 
 
 
 def run_action(
-    input_mode: str,
     video_path: str,
     audio_path: str,
     bilibili_url: str,
@@ -159,8 +171,16 @@ def run_action(
         do_ocr = False
         ocr_region = None
     else:
-        mode = "local" if input_mode == "本地视频" else "bilibili"
-        local_media_path = video_path
+        has_video = bool(video_path)
+        has_url = bool(bilibili_url)
+        if has_video and has_url:
+            raise gr.Error("请只选择本地视频或填写 Bilibili 网址之一，不要同时使用。")
+        if has_url:
+            mode = "bilibili"
+            local_media_path = None
+        else:
+            mode = "local"
+            local_media_path = video_path
         ocr_region = _build_ocr_region(
             ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h
         )
@@ -184,6 +204,8 @@ def run_action(
                 bilibili_url=bilibili_url,
                 output_dir=output_dir,
                 model_size=model_size,
+                do_transcribe=do_transcribe,
+                do_ocr=do_ocr,
                 device=("cuda" if (isinstance(device, str) and device.upper() == "GPU") else "cpu"),
                 use_fp16=use_fp16,
                 language=language,
@@ -227,9 +249,12 @@ def run_action(
 with gr.Blocks(title="视频转文字") as demo:
     gr.Markdown("# 视频转文字（本地版）\n支持本地视频或 Bilibili 网址输入，生成音频稿与字幕稿。")
 
-    with gr.Row():
-        input_mode = gr.Radio(
-            ["本地视频", "Bilibili URL"], value="本地视频", label="输入方式"
+    with gr.Accordion("提示词示范", open=False):
+        gr.Textbox(
+            label="可直接复制使用",
+            value=PROMPT_DEMO,
+            lines=14,
+            interactive=False,
         )
 
     with gr.Row():
@@ -249,7 +274,7 @@ with gr.Blocks(title="视频转文字") as demo:
 
     with gr.Row():
         do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
-        do_ocr = gr.Checkbox(value=False, label="启用 OCR 字幕识别 (Tesseract)")
+        do_ocr = gr.Checkbox(value=False, label="启用字幕识别")
         use_fp16 = gr.Checkbox(value=False, label="使用 FP16（混合精度，加速但可能不兼容）")
 
     # 计算设备单独一行：把说明作为 Radio 的标签，并在右侧显示提示图标
@@ -304,7 +329,6 @@ with gr.Blocks(title="视频转文字") as demo:
     run_btn.click(
         run_action,
         inputs=[
-            input_mode,
             video_path,
             audio_path,
             bilibili_url,
@@ -329,7 +353,7 @@ with gr.Blocks(title="视频转文字") as demo:
     def _toggle_ocr_preview(enabled: bool):
         # 控制 OCR 相关控件与预览的可见性（返回顺序须与 outputs 对应）
         v = gr.update(visible=enabled)
-        return v, v, v, v, v, v, v, v
+        return v, v, v, v, v, v, v, v, v
 
     do_ocr.change(
         _toggle_ocr_preview,
@@ -342,6 +366,7 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_x,
             ocr_region_y,
             ocr_region_w,
+            ocr_region_h,
             ocr_region_note,
         ],
     )
