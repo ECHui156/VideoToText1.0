@@ -59,9 +59,81 @@ def _on_video_selected(video_path: str, x: float, y: float, w: float, h: float):
     return gr.update(maximum=max(duration, 0.0), value=preview_time), preview_image
 
 
+def _on_media_selected(video_path: str, audio_path: str, x: float, y: float, w: float, h: float):
+    """
+    当本地视频或本地音频被选择时调用。
+    - 若选择音频：禁用并取消勾选 OCR，隐藏所有 OCR 相关控件。
+    - 若选择视频：启用 OCR 选择（但不强制显示 OCR 选项），并返回预览。
+    返回值顺序与绑定的 outputs 对应。
+    """
+    # 音频优先（若选择了音频文件，则视为纯音频输入）
+    if audio_path:
+        preview_time_update = gr.update(maximum=0, value=0)
+        preview_image = None
+        do_ocr_update = gr.update(value=False, interactive=False)
+        hidden = gr.update(visible=False)
+        return (
+            preview_time_update,
+            preview_image,
+            do_ocr_update,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+            hidden,
+        )
+
+    # 若选择视频，则生成预览并确保 OCR 控件可交互（visibility 由 do_ocr 控制）
+    if video_path:
+        try:
+            duration = get_video_duration(video_path)
+        except RuntimeError as exc:
+            raise gr.Error(str(exc))
+        preview_time = 0.0
+        preview_image = _build_ocr_preview(video_path, preview_time, x, y, w, h)
+        do_ocr_update = gr.update(interactive=True)
+        noop = gr.update()
+        return (
+            gr.update(maximum=max(duration, 0.0), value=preview_time),
+            preview_image,
+            do_ocr_update,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+        )
+
+    # 若都未选择，重置预览并保持 OCR 可交互但隐藏相关控件
+    hidden = gr.update(visible=False)
+    return (
+        gr.update(maximum=0, value=0),
+        None,
+        gr.update(interactive=True),
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+        hidden,
+    )
+
+
 def run_action(
     input_mode: str,
     video_path: str,
+    audio_path: str,
     bilibili_url: str,
     output_dir: str,
     model_size: str,
@@ -75,14 +147,23 @@ def run_action(
     ocr_region_h: float,
     do_transcribe: bool,
     do_ocr: bool,
-    use_gpu: bool,
+    device: str,
     use_fp16: bool,
     progress=gr.Progress(),
 ):
-    mode = "local" if input_mode == "本地视频" else "bilibili"
-    ocr_region = _build_ocr_region(
-        ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h
-    )
+    # 优先使用本地音频（若提供），否则本地视频或 Bilibili
+    if audio_path:
+        mode = "local"
+        local_media_path = audio_path
+        # 音频输入时强制关闭 OCR
+        do_ocr = False
+        ocr_region = None
+    else:
+        mode = "local" if input_mode == "本地视频" else "bilibili"
+        local_media_path = video_path
+        ocr_region = _build_ocr_region(
+            ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h
+        )
 
     q: "queue.Queue" = queue.Queue()
 
@@ -99,11 +180,11 @@ def run_action(
         try:
             result = run_pipeline(
                 input_type=mode,
-                local_video_path=video_path,
+                local_video_path=local_media_path,
                 bilibili_url=bilibili_url,
                 output_dir=output_dir,
                 model_size=model_size,
-                device=("cuda" if use_gpu else "cpu"),
+                device=("cuda" if (isinstance(device, str) and device.upper() == "GPU") else "cpu"),
                 use_fp16=use_fp16,
                 language=language,
                 ocr_fps=ocr_fps,
@@ -157,53 +238,55 @@ with gr.Blocks(title="视频转文字") as demo:
             file_types=[".mp4", ".mkv", ".flv", ".mov", ".avi"],
             type="filepath",
         )
+        audio_path = gr.File(
+            label="本地音频文件",
+            file_types=[".mp3", ".wav", ".m4a", ".flac"],
+            type="filepath",
+        )
         bilibili_url = gr.Textbox(label="Bilibili 网址", placeholder="https://www.bilibili.com/video/...", lines=1)
 
     output_dir = gr.Textbox(label="输出目录", value="outputs", lines=1)
 
     with gr.Row():
         do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
-        do_ocr = gr.Checkbox(value=True, label="启用 OCR 字幕识别 (Tesseract)")
-        use_gpu = gr.Checkbox(value=False, label="使用 GPU (CUDA) 进行转写")
+        do_ocr = gr.Checkbox(value=False, label="启用 OCR 字幕识别 (Tesseract)")
         use_fp16 = gr.Checkbox(value=False, label="使用 FP16（混合精度，加速但可能不兼容）")
 
-    with gr.Accordion("高级设置", open=False):
-        model_pref = gr.Dropdown(
-            ["快速 (tiny)", "平衡 (base)", "高精度 (large)", "自定义"],
-            value="平衡 (base)",
-            label="模型强度偏好",
-        )
+    # 计算设备单独一行：把说明作为 Radio 的标签，并在右侧显示提示图标
+    with gr.Row():
+        # 使用 Markdown/HTML 显示标签与提示，确保提示能被渲染
+        gr.Markdown('计算设备 <span title="GPU 通常比 CPU 更快，适合大模型与长音频；若没有 NVIDIA CUDA GPU，请选择 CPU" style="font-size:14px;">ⓘ</span>')
+    with gr.Row():    
+        device = gr.Radio([
+            "CPU",
+            "GPU",
+        ], value="GPU", label=None)
 
-        model_size = gr.Dropdown(
-            ["tiny", "base", "small", "medium", "large"], value="base", label="Whisper 模型"
-        )
+    with gr.Accordion("高级设置", open=True):
+        # 直接选择模型，不需要重复的强度偏好下拉
+        with gr.Row():
+            model_size = gr.Dropdown(
+                ["tiny", "base", "small", "medium", "large", "large-v3", "large-v3-turbo"],
+                value="large-v3",
+                label="Whisper 模型",
+            )
+            model_info = gr.HTML('<span title="大模型（large / large-v3）通常提供最高识别精度；turbo 版本在速度/资源上做过优化，可能稍有精度差异" style="font-size:14px; margin-left:6px;">ⓘ</span>')
         language = gr.Dropdown(
             ["zh", "en", "auto"], value="zh", label="语音识别语言"
         )
-        ocr_fps = gr.Slider(0.5, 5.0, value=1.0, step=0.5, label="OCR 抽帧频率 (fps)")
-        ocr_lang = gr.Textbox(label="Tesseract 语言", value="chi_sim+eng", lines=1)
-        ocr_similarity = gr.Slider(0.7, 0.98, value=0.9, step=0.01, label="OCR 去重相似度阈值")
+        ocr_fps = gr.Slider(0.5, 5.0, value=1.0, step=0.5, label="OCR 抽帧频率 (fps)", visible=False)
+        ocr_lang = gr.Textbox(label="Tesseract 语言", value="chi_sim+eng", lines=1, visible=False)
+        ocr_similarity = gr.Slider(0.7, 0.98, value=0.9, step=0.01, label="OCR 去重相似度阈值", visible=False)
 
-        gr.Markdown("OCR 识别区域使用相对比例 (x、y、width、height)，范围 0-1。")
+        ocr_region_note = gr.Markdown("OCR 识别区域使用相对比例 (x、y、width、height)，范围 0-1。", visible=False)
         with gr.Row():
-            ocr_region_x = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[0], step=0.01, label="OCR 区域 X")
-            ocr_region_y = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[1], step=0.01, label="OCR 区域 Y")
+            ocr_region_x = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[0], step=0.01, label="OCR 区域 X", visible=False)
+            ocr_region_y = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[1], step=0.01, label="OCR 区域 Y", visible=False)
         with gr.Row():
-            ocr_region_w = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[2], step=0.01, label="OCR 区域 Width")
-            ocr_region_h = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[3], step=0.01, label="OCR 区域 Height")
+            ocr_region_w = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[2], step=0.01, label="OCR 区域 Width", visible=False)
+            ocr_region_h = gr.Slider(0, 1, value=DEFAULT_OCR_REGION[3], step=0.01, label="OCR 区域 Height", visible=False)
 
-        def _on_model_pref_change(pref: str):
-            # 映射偏好到具体模型尺寸；自定义时展示 model_size
-            mapping = {
-                "快速 (tiny)": "tiny",
-                "平衡 (base)": "base",
-                "高精度 (large)": "large",
-            }
-            if pref in mapping:
-                return gr.update(value=mapping[pref]), gr.update(visible=False)
-            return gr.update(visible=True)
-
-        model_pref.change(_on_model_pref_change, inputs=[model_pref], outputs=[model_size, model_size])
+        # 删除模型强度偏好选项（直接使用模型下拉）
 
     ocr_preview_section = gr.Accordion("OCR 区域预览（仅本地视频）", open=False)
     with ocr_preview_section:
@@ -223,6 +306,7 @@ with gr.Blocks(title="视频转文字") as demo:
         inputs=[
             input_mode,
             video_path,
+            audio_path,
             bilibili_url,
             output_dir,
             model_size,
@@ -236,21 +320,68 @@ with gr.Blocks(title="视频转文字") as demo:
             ocr_region_h,
             do_transcribe,
             do_ocr,
-            use_gpu,
+            device,
             use_fp16,
         ],
         outputs=[audio_txt, subtitle_txt, log_box],
     )
 
     def _toggle_ocr_preview(enabled: bool):
-        return gr.update(visible=enabled)
+        # 控制 OCR 相关控件与预览的可见性（返回顺序须与 outputs 对应）
+        v = gr.update(visible=enabled)
+        return v, v, v, v, v, v, v, v
 
-    do_ocr.change(_toggle_ocr_preview, inputs=[do_ocr], outputs=[ocr_preview_section])
+    do_ocr.change(
+        _toggle_ocr_preview,
+        inputs=[do_ocr],
+        outputs=[
+            ocr_preview_section,
+            ocr_fps,
+            ocr_lang,
+            ocr_similarity,
+            ocr_region_x,
+            ocr_region_y,
+            ocr_region_w,
+            ocr_region_note,
+        ],
+    )
 
     video_path.change(
-        _on_video_selected,
-        inputs=[video_path, ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h],
-        outputs=[preview_time, preview_image],
+        _on_media_selected,
+        inputs=[video_path, audio_path, ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h],
+        outputs=[
+            preview_time,
+            preview_image,
+            do_ocr,
+            ocr_preview_section,
+            ocr_fps,
+            ocr_lang,
+            ocr_similarity,
+            ocr_region_x,
+            ocr_region_y,
+            ocr_region_w,
+            ocr_region_h,
+            ocr_region_note,
+        ],
+    )
+
+    audio_path.change(
+        _on_media_selected,
+        inputs=[video_path, audio_path, ocr_region_x, ocr_region_y, ocr_region_w, ocr_region_h],
+        outputs=[
+            preview_time,
+            preview_image,
+            do_ocr,
+            ocr_preview_section,
+            ocr_fps,
+            ocr_lang,
+            ocr_similarity,
+            ocr_region_x,
+            ocr_region_y,
+            ocr_region_w,
+            ocr_region_h,
+            ocr_region_note,
+        ],
     )
 
     preview_inputs = [
