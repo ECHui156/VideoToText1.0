@@ -21,6 +21,8 @@ from src.ocr_utils import (
     get_video_duration,
     validate_ocr_region,
 )
+from src.export_utils import sanitize_filename, segments_to_plain_text
+from src.llm_utils import call_llm_cleanup
 from src.pipeline import run_pipeline
 
 
@@ -35,6 +37,42 @@ PROMPT_DEMO = """# Role
 4. **保持原汁原味**：除了纠错和标点外，禁止随意增删原文本的实质内容，严格保留讲话者原本的口语风格、语气和表述逻辑。
 # Output
 直接输出整理后的正文即可，不需要任何额外的解释或寒暄。"""
+
+PROMPT_DEMO_OCR = """# Role
+你是一位资深的文字编辑与排版专家，极其擅长处理由视频 OCR（光学字符识别）导出的粗糙、碎片化字幕文本。你能精准地将杂乱无章的短句还原为流畅、通顺、结构清晰的专业文章。
+# Task
+请对用户提供的 OCR 字幕文本进行深度清理与排版重组。你需要去除所有的识别噪音与重复项，补充标点，并根据语义将“一句一行”的碎片文本重新合并为逻辑清晰的段落。
+# Processing Rules
+1. 【去重与去噪】：
+    - 智能识别并删除连续重复出现的句子或短语（由于视频帧停留导致的重复识别）。
+    - 彻底清理毫无意义的 OCR 乱码字符（如 `|`、`_`、`=`、`[` 等）、与解说内容无关的背景英文单词或字母碎片。
+    - 仅保留真正的中文/英文解说核心内容。
+2. 【智能标点】：
+    - 原始文本通常缺乏标点。请务必根据上下文的语境、语气和断句节奏，自动补充正确的现代汉语标点符号（如逗号、句号、问号、顿号等），切勿仅用空格隔开。
+3. 【语义分段】：
+    - 打破原有的“一句一行”或“半句一行”的碎片格式，将连贯的话语合并成完整的段落。
+    - 寻找“语义转折”、“话题切换”或“时间线过渡”作为自然分段的依据。
+    - 控制段落长度：避免出现长篇大论不分段的情况，若同一话题篇幅过长，请根据子论点的切换进行适度切分，提升阅读体验。
+4. 【坚守原意】：
+    - 在执行上述清理和排版时，绝对禁止对讲话者的真实有效原话进行篡改、润色、缩写或总结。必须原汁原味地保留讲述者的原意与用词。
+# Output Format
+请严格按照以下两个模块进行输出：
+### 整理后的文本
+（在此输出经过排版整理、加好标点、分好段落的纯净文本）
+### 整理说明
+（极其简短地向用户汇报处理情况，例如：“已清理约 XX 处连续重复的乱码与无意义字符，补充了适当的标点，并根据话题走向将全文分为 X 个段落。”）"""
+
+
+def _select_llm_input(audio_segments, subtitle_segments):
+    if audio_segments:
+        audio_text = segments_to_plain_text(audio_segments)
+        if audio_text:
+            return PROMPT_DEMO, audio_text, "音频稿"
+    if subtitle_segments:
+        subtitle_text = segments_to_plain_text(subtitle_segments)
+        if subtitle_text:
+            return PROMPT_DEMO_OCR, subtitle_text, "字幕稿"
+    return "", "", ""
 
 
 def _build_ocr_region(x: float, y: float, w: float, h: float):
@@ -161,8 +199,12 @@ def run_action(
     do_ocr: bool,
     device: str,
     use_fp16: bool,
+    use_llm: bool,
+    llm_api_key: str,
     progress=gr.Progress(),
 ):
+    if use_llm and not (llm_api_key or "").strip():
+        raise gr.Error("已选择大模型整理，但未填写 API Key。")
     # 优先使用本地音频（若提供），否则本地视频或 Bilibili
     if audio_path:
         mode = "local"
@@ -215,7 +257,26 @@ def run_action(
                 ocr_region=ocr_region,
                 progress_cb=progress_cb,
             )
-            q.put(("done", result))
+            llm_txt_path = ""
+            if use_llm:
+                prompt, llm_input, source_label = _select_llm_input(
+                    result.audio_segments, result.subtitle_segments
+                )
+                if not llm_input:
+                    q.put(("msg", "未生成整理稿（无可整理文本）"))
+                else:
+                    q.put(("msg", f"开始大模型整理（{source_label}）"))
+                    llm_output = call_llm_cleanup(llm_api_key, prompt, llm_input)
+                    output_dir_path = os.path.abspath(output_dir or "outputs")
+                    os.makedirs(output_dir_path, exist_ok=True)
+                    base_name = sanitize_filename(
+                        os.path.splitext(os.path.basename(result.video_path))[0]
+                    )
+                    llm_txt_path = os.path.join(output_dir_path, f"{base_name}_整理稿.txt")
+                    with open(llm_txt_path, "w", encoding="utf-8") as f:
+                        f.write(llm_output)
+                    q.put(("msg", f"输出整理稿: {llm_txt_path}"))
+            q.put(("done", (result, llm_txt_path)))
         except Exception as exc:
             q.put(("error", str(exc)))
 
@@ -230,19 +291,24 @@ def run_action(
             desc = payload
             if not logs or logs[-1] != desc:
                 logs.append(desc)
-            yield None, None, "\n".join(logs)
+            yield None, None, None, "\n".join(logs)
         elif typ == "done":
-            result = payload
+            result, llm_txt_path = payload
             # 合并并去重连续重复条目
             for l in (result.logs or []):
                 if not logs or logs[-1] != l:
                     logs.append(l)
-            yield result.audio_txt_path, result.subtitle_txt_path, "\n".join(logs)
+            yield (
+                result.audio_txt_path,
+                result.subtitle_txt_path,
+                llm_txt_path or None,
+                "\n".join(logs),
+            )
             break
         elif typ == "error":
             err = payload
             logs.append(f"错误: {err}")
-            yield None, None, "\n".join(logs)
+            yield None, None, None, "\n".join(logs)
             break
 
 
@@ -250,10 +316,18 @@ with gr.Blocks(title="视频转文字") as demo:
     gr.Markdown("# 视频转文字（本地版）\n支持本地视频或 Bilibili 网址输入，生成音频稿与字幕稿。")
 
     with gr.Accordion("提示词示范", open=False):
+        gr.Markdown("### 音频稿排版整理提示词")
         gr.Textbox(
             label="可直接复制使用",
             value=PROMPT_DEMO,
             lines=14,
+            interactive=False,
+        )
+        gr.Markdown("### OCR生成字幕稿排版整理提示词")
+        gr.Textbox(
+            label="可直接复制使用",
+            value=PROMPT_DEMO_OCR,
+            lines=22,
             interactive=False,
         )
 
@@ -276,6 +350,15 @@ with gr.Blocks(title="视频转文字") as demo:
         do_transcribe = gr.Checkbox(value=True, label="启用音频转写 (Whisper)")
         do_ocr = gr.Checkbox(value=False, label="启用字幕识别")
         use_fp16 = gr.Checkbox(value=False, label="使用 FP16（混合精度，加速但可能不兼容）")
+
+    with gr.Accordion("大模型整理", open=False):
+        use_llm = gr.Checkbox(value=False, label="使用大模型整理稿件")
+        llm_api_key = gr.Textbox(
+            label="API Key",
+            type="password",
+            lines=1,
+            visible=True,
+        )
 
     # 计算设备单独一行：把说明作为 Radio 的标签，并在右侧显示提示图标
     with gr.Row():
@@ -323,6 +406,7 @@ with gr.Blocks(title="视频转文字") as demo:
     with gr.Row():
         audio_txt = gr.File(label="音频稿（txt）")
         subtitle_txt = gr.File(label="字幕稿（txt）")
+        llm_txt = gr.File(label="整理稿（txt）")
 
     log_box = gr.Textbox(label="运行日志", lines=10)
 
@@ -346,8 +430,10 @@ with gr.Blocks(title="视频转文字") as demo:
             do_ocr,
             device,
             use_fp16,
+            use_llm,
+            llm_api_key,
         ],
-        outputs=[audio_txt, subtitle_txt, log_box],
+        outputs=[audio_txt, subtitle_txt, llm_txt, log_box],
     )
 
     def _toggle_ocr_preview(enabled: bool):
